@@ -60,8 +60,8 @@ class SIFT(CMCInterface):
         else:
             self.warp_matrix = np.eye(2, 3, dtype=np.float32)
 
-        self.detector = cv2.SIFT_create(nOctaveLayers=3, contrastThreshold=0.02, edgeThreshold=20)
-        self.extractor = cv2.SIFT_create(nOctaveLayers=3, contrastThreshold=0.02, edgeThreshold=20)
+        self.detector = cv2.SIFT_create(nOctaveLayers=2, contrastThreshold=0.5, edgeThreshold=10)
+        self.extractor = cv2.SIFT_create(nOctaveLayers=2, contrastThreshold=0.5, edgeThreshold=10)
         self.matcher = cv2.BFMatcher(cv2.NORM_L2)
 
         self.prev_img = None
@@ -70,7 +70,22 @@ class SIFT(CMCInterface):
         self.draw_keypoint_matches = draw_keypoint_matches
         self.align = align
 
-    def apply(self, img, dets):
+    def apply(self, img: np.ndarray, dets: np.ndarray) -> np.ndarray:
+        """Apply ORB-based sparse optical flow to compute the warp matrix.
+
+        Parameters
+        ----------
+        img : ndarray
+            The input image.
+        dets : ndarray
+            Detected bounding boxes in the image.
+
+        Returns
+        -------
+        ndarray
+            The warp matrix from the matching keypoint in the previous image to the current.
+            The warp matrix is always 2x3.
+        """
 
         H = np.eye(2, 3)
 
@@ -129,19 +144,12 @@ class SIFT(CMCInterface):
         mean_spatial_distances = np.mean(spatial_distances, 0)
         std_spatial_distances = np.std(spatial_distances, 0)
 
-        inliesrs = (spatial_distances - mean_spatial_distances) < 2.5 * std_spatial_distances
+        inliers = (spatial_distances - mean_spatial_distances) < 2.5 * std_spatial_distances
 
-        goodMatches = []
-        prevPoints = []
-        currPoints = []
-        for i in range(len(matches)):
-            if inliesrs[i, 0] and inliesrs[i, 1]:
-                goodMatches.append(matches[i])
-                prevPoints.append(self.prev_keypoints[matches[i].queryIdx].pt)
-                currPoints.append(keypoints[matches[i].trainIdx].pt)
+        good_matches = [matches[i] for i in range(len(matches)) if np.all(inliers[i])]
 
-        prevPoints = np.array(prevPoints)
-        currPoints = np.array(currPoints)
+        prevPoints = np.array([self.prev_keypoints[m.queryIdx].pt for m in good_matches])
+        currPoints = np.array([keypoints[m.trainIdx].pt for m in good_matches])
 
         # Draw the keypoint matches on the output image
         if self.draw_keypoint_matches:
@@ -174,7 +182,7 @@ class SIFT(CMCInterface):
 
         # find rigid matrix
         if (np.size(prevPoints, 0) > 4) and (np.size(prevPoints, 0) == np.size(prevPoints, 0)):
-            H, inliesrs = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
+            H, inliers = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
 
             # upscale warp matrix to original images size
             if self.scale < 1.0:
